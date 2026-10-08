@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase, DocumentItem } from '@/lib/supabase';
+import { supabase, DocumentItem } from '../lib/supabase';
 import { AlertCircle, CheckCircle2, Clock, Plus, ExternalLink } from 'lucide-react';
 
 export default function Dashboard() {
