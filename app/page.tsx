@@ -1,526 +1,407 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { supabase, DocumentItem } from '../lib/supabase';
+import { useEffect, useState, useRef } from 'react';
+import { supabase } from '../lib/supabase';
 import { 
   AlertCircle, 
   CheckCircle2, 
-  Clock, 
-  Plus, 
+  Upload, 
   ExternalLink, 
   Trash2, 
-  Edit2, 
-  Check, 
-  X,
-  FolderPlus,
-  AlertTriangle,
-  FolderEdit
+  FolderPlus, 
+  FileText,
+  AlertTriangle
 } from 'lucide-react';
 
-interface CategoryItem {
+interface CriteriaItem {
   id: string;
-  name: string;
+  category: string;
+  title: string;
+  document_url: string | null;
+  file_name: string | null;
+  uploaded_at: string | null;
+  notes: string;
 }
 
 export default function Dashboard() {
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [docs, setDocs] = useState<DocumentItem[]>([]);
+  const [items, setItems] = useState<CriteriaItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
-  // Category management state
+  // New criteria form
+  const [categories, setCategories] = useState<string[]>([
+    'Licenses & Legal',
+    'Land & Facilities',
+    'Raw Materials',
+    'Finance & Tax',
+    'HR & Operations',
+  ]);
+  const [selectedCategory, setSelectedCategory] = useState('Licenses & Legal');
+  const [newTitle, setNewTitle] = useState('');
+  const [newNotes, setNewNotes] = useState('');
+
+  // Add custom category
+  const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [showCategoryModal, setShowCategoryModal] = useState(false);
-  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [editingCategoryName, setEditingCategoryName] = useState('');
 
-  // Checkpoint Form state
-  const [selectedCategory, setSelectedCategory] = useState('');
-  const [title, setTitle] = useState('');
-  const [documentUrl, setDocumentUrl] = useState('');
-  const [notes, setNotes] = useState('');
-
-  // Checkpoint inline edit state
-  const [editingDocId, setEditingDocId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editUrl, setEditUrl] = useState('');
-  const [editNotes, setEditNotes] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeUploadCriteriaId, setActiveUploadCriteriaId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchData();
+    fetchCriteria();
   }, []);
 
-  async function fetchData() {
-    setLoading(true);
-    // Fetch categories
-    const { data: catData } = await supabase
-      .from('categories')
-      .select('*')
-      .order('name', { ascending: true });
-
-    // Fetch documents
-    const { data: docData } = await supabase
-      .from('documents')
-      .select('*')
-      .order('created_at', { ascending: true });
-
-    if (catData) {
-      setCategories(catData as CategoryItem[]);
-      if (catData.length > 0 && !selectedCategory) {
-        setSelectedCategory(catData[0].name);
-      }
-    }
-    if (docData) {
-      setDocs(docData as DocumentItem[]);
-    }
+  async function fetchCriteria() {
     setLoading(false);
-  }
-
-  // --- Category Handlers ---
-  async function addCategory(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = newCategoryName.trim();
-    if (!trimmed) return;
-
-    const { error } = await supabase.from('categories').insert([{ name: trimmed }]);
-    if (!error) {
-      setNewCategoryName('');
-      setShowCategoryModal(false);
-      fetchData();
-    } else {
-      alert('Category already exists or failed to save.');
+    const { data } = await supabase.from('criteria').select('*').order('category', { ascending: true });
+    if (data) {
+      setItems(data as CriteriaItem[]);
+      const uniqueCats = Array.from(new Set(data.map((d: CriteriaItem) => d.category)));
+      setCategories(prev => Array.from(new Set([...prev, ...uniqueCats])));
     }
   }
 
-  async function saveCategoryEdit(cat: CategoryItem) {
-    const trimmed = editingCategoryName.trim();
-    if (!trimmed || trimmed === cat.name) {
-      setEditingCategoryId(null);
+  // Handle direct file upload to Supabase Storage
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !activeUploadCriteriaId) return;
+
+    setUploadingId(activeUploadCriteriaId);
+
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${activeUploadCriteriaId}-${Date.now()}.${fileExt}`;
+
+    // Upload to Supabase bucket 'business-docs'
+    const { error: uploadError } = await supabase.storage
+      .from('business-docs')
+      .upload(filePath, file, { upsert: true });
+
+    if (uploadError) {
+      alert(`Upload failed: ${uploadError.message}`);
+      setUploadingId(null);
       return;
     }
 
-    // Update in categories table
-    const { error } = await supabase
-      .from('categories')
-      .update({ name: trimmed })
-      .eq('id', cat.id);
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('business-docs')
+      .getPublicUrl(filePath);
 
-    if (!error) {
-      // Also update any existing documents under this category name
-      await supabase
-        .from('documents')
-        .update({ category: trimmed })
-        .eq('category', cat.name);
+    // Automatically mark as complete by storing document_url & file_name
+    await supabase.from('criteria').update({
+      document_url: publicUrlData.publicUrl,
+      file_name: file.name,
+      uploaded_at: new Date().toISOString()
+    }).eq('id', activeUploadCriteriaId);
 
-      setEditingCategoryId(null);
-      fetchData();
-    }
+    setUploadingId(null);
+    setActiveUploadCriteriaId(null);
+    fetchCriteria();
   }
 
-  async function deleteCategory(cat: CategoryItem) {
-    const associatedDocs = docs.filter(d => d.category === cat.name);
-    const confirmMsg = associatedDocs.length > 0
-      ? `This category contains ${associatedDocs.length} checkpoints. Deleting it will also remove all its checkpoints. Proceed?`
-      : `Delete category "${cat.name}"?`;
-
-    if (!confirm(confirmMsg)) return;
-
-    // Delete associated docs first, then category
-    await supabase.from('documents').delete().eq('category', cat.name);
-    await supabase.from('categories').delete().eq('id', cat.id);
-    fetchData();
+  function triggerUpload(criteriaId: string) {
+    setActiveUploadCriteriaId(criteriaId);
+    fileInputRef.current?.click();
   }
 
-  // --- Checkpoint Handlers ---
-  async function addDocument(e: React.FormEvent) {
+  async function removeDocument(criteriaId: string) {
+    if (!confirm('Remove this uploaded document? The criteria will return to NOT COMPLETED.')) return;
+    await supabase.from('criteria').update({
+      document_url: null,
+      file_name: null,
+      uploaded_at: null
+    }).eq('id', criteriaId);
+    fetchCriteria();
+  }
+
+  async function deleteCriteria(criteriaId: string) {
+    if (!confirm('Delete this criteria completely?')) return;
+    await supabase.from('criteria').delete().eq('id', criteriaId);
+    fetchCriteria();
+  }
+
+  async function addCriteria(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !selectedCategory) return;
+    if (!newTitle.trim()) return;
 
-    const { error } = await supabase.from('documents').insert([
-      { category: selectedCategory, title: title.trim(), status: 'Pending', document_url: documentUrl.trim(), notes: notes.trim() }
-    ]);
+    await supabase.from('criteria').insert([{
+      category: selectedCategory,
+      title: newTitle.trim(),
+      notes: newNotes.trim()
+    }]);
 
-    if (!error) {
-      setTitle('');
-      setDocumentUrl('');
-      setNotes('');
-      fetchData();
+    setNewTitle('');
+    setNewNotes('');
+    fetchCriteria();
+  }
+
+  function handleAddCategory(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newCategoryName.trim();
+    if (trimmed && !categories.includes(trimmed)) {
+      setCategories(prev => [...prev, trimmed]);
+      setSelectedCategory(trimmed);
+      setNewCategoryName('');
+      setShowAddCategory(false);
     }
   }
 
-  async function updateDocStatus(id: string, newStatus: DocumentItem['status']) {
-    await supabase.from('documents').update({ status: newStatus }).eq('id', id);
-    fetchData();
-  }
+  const totalCriteria = items.length;
+  const completedCriteria = items.filter(i => i.document_url !== null).length;
+  const missingCriteria = items.filter(i => i.document_url === null);
+  const readiness = totalCriteria ? Math.round((completedCriteria / totalCriteria) * 100) : 0;
 
-  async function deleteDoc(id: string) {
-    if (!confirm('Are you sure you want to delete this checkpoint?')) return;
-    await supabase.from('documents').delete().eq('id', id);
-    fetchData();
-  }
-
-  function startEditingDoc(item: DocumentItem) {
-    setEditingDocId(item.id);
-    setEditTitle(item.title);
-    setEditUrl(item.document_url || '');
-    setEditNotes(item.notes || '');
-  }
-
-  async function saveDocEdit(id: string) {
-    await supabase
-      .from('documents')
-      .update({
-        title: editTitle.trim(),
-        document_url: editUrl.trim(),
-        notes: editNotes.trim(),
-      })
-      .eq('id', id);
-
-    setEditingDocId(null);
-    fetchData();
-  }
-
-  // Global counts
-  const totalCompleted = docs.filter(d => d.status === 'Completed').length;
-  const totalPending = docs.filter(d => d.status === 'Pending').length;
-  const totalInProgress = docs.filter(d => d.status === 'In Progress').length;
-  const overallReadiness = docs.length ? Math.round((totalCompleted / docs.length) * 100) : 0;
+  const currentCategories = Array.from(new Set([...categories, ...items.map(i => i.category)]));
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-8 font-sans">
+      {/* Hidden file input for file picker */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileUpload} 
+        className="hidden" 
+        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+      />
+
       <div className="max-w-6xl mx-auto space-y-6">
         
-        {/* Top Header & High-Level Counters */}
+        {/* Header with Overall Status */}
         <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">Business Document Vault</h1>
-            <p className="text-slate-500 text-sm mt-1">Audit compliance status, licenses, land records, and checklists.</p>
+            <h1 className="text-3xl font-extrabold text-slate-900">Document Compliance Tracker</h1>
+            <p className="text-slate-500 text-sm mt-1">
+              Set required criteria per category. Upload documents to fulfill each requirement.
+            </p>
           </div>
-          <div className="flex gap-2 sm:gap-3 flex-wrap">
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-center min-w-[80px]">
-              <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Completed</span>
-              <p className="text-2xl font-black text-emerald-700">{totalCompleted}</p>
+          <div className="flex gap-3">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2 text-center w-28">
+              <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Fulfilled</span>
+              <p className="text-2xl font-black text-emerald-700">{completedCriteria}</p>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-center min-w-[80px]">
-              <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">In Progress</span>
-              <p className="text-2xl font-black text-amber-700">{totalInProgress}</p>
+            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-2 text-center w-28">
+              <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider">Missing Docs</span>
+              <p className="text-2xl font-black text-rose-700">{missingCriteria.length}</p>
             </div>
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-2 text-center min-w-[80px]">
-              <span className="text-[10px] font-bold text-rose-800 uppercase tracking-wider">Pending</span>
-              <p className="text-2xl font-black text-rose-700">{totalPending}</p>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-center min-w-[90px]">
-              <span className="text-[10px] font-bold text-blue-800 uppercase tracking-wider">Readiness</span>
-              <p className="text-2xl font-black text-blue-700">{overallReadiness}%</p>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-center w-28">
+              <span className="text-[10px] font-bold text-blue-800 uppercase tracking-wider">Compliance</span>
+              <p className="text-2xl font-black text-blue-700">{readiness}%</p>
             </div>
           </div>
         </div>
 
-        {/* Manage Categories & Add Checkpoints Controls */}
-        <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-xs space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700">Add Checkpoint to Category</h2>
+        {/* Global Alert for Incomplete Criteria */}
+        {missingCriteria.length > 0 && (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 text-rose-950 shadow-xs">
+            <AlertTriangle className="text-rose-600 shrink-0 mt-0.5" size={20} />
+            <div>
+              <p className="font-bold text-sm">Action Needed: {missingCriteria.length} Required Document(s) Not Yet Uploaded</p>
+              <p className="text-xs text-rose-700 mt-1">
+                Pending uploads: {missingCriteria.map(m => `"${m.title}" (${m.category})`).join(', ')}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Define Criteria Form */}
+        <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">Add New Document Requirement / Criteria</h2>
             <button
               type="button"
-              onClick={() => setShowCategoryModal(!showCategoryModal)}
-              className="text-xs flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold px-3 py-1.5 rounded-lg transition cursor-pointer"
+              onClick={() => setShowAddCategory(!showAddCategory)}
+              className="text-xs text-blue-600 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
             >
-              <FolderPlus size={15} /> {showCategoryModal ? 'Hide Category Manager' : 'Manage / Add Categories'}
+              <FolderPlus size={14} /> {showAddCategory ? 'Close' : '+ New Category'}
             </button>
           </div>
 
-          {/* Expandable Category Management Panel */}
-          {showCategoryModal && (
-            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
-              <h3 className="text-xs font-bold uppercase text-slate-600">Create New Category</h3>
-              <form onSubmit={addCategory} className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="New category name (e.g. Factory Clearances, Export Approvals)..."
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                  required
-                />
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-lg cursor-pointer"
-                >
-                  Create
-                </button>
-              </form>
+          {showAddCategory && (
+            <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex gap-2">
+              <input
+                type="text"
+                placeholder="New Category Name (e.g. Export Customs, Factory Inspections)..."
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                className="flex-1 bg-white border border-slate-300 rounded px-3 py-1.5 text-sm"
+              />
+              <button
+                type="button"
+                onClick={handleAddCategory}
+                className="bg-blue-600 text-white text-xs font-bold px-4 py-1.5 rounded hover:bg-blue-700 cursor-pointer"
+              >
+                Create
+              </button>
             </div>
           )}
 
-          {/* Form to add a new checkpoint */}
-          <form onSubmit={addDocument} className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <form onSubmit={addCriteria} className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="border border-slate-300 rounded-lg p-2.5 text-sm bg-white font-medium"
-              required
             >
-              <option value="" disabled>Select Category</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.name}>{c.name}</option>
+              {currentCategories.map(c => (
+                <option key={c} value={c}>{c}</option>
               ))}
             </select>
             <input
               type="text"
-              placeholder="Checkpoint Title (e.g. Fire NOC)"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="border border-slate-300 rounded-lg p-2.5 text-sm"
+              placeholder="Criteria Title (e.g. Fire NOC Certificate)"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              className="border border-slate-300 rounded-lg p-2.5 text-sm md:col-span-1"
               required
             />
             <input
-              type="url"
-              placeholder="Drive / Document URL (optional)"
-              value={documentUrl}
-              onChange={(e) => setDocumentUrl(e.target.value)}
-              className="border border-slate-300 rounded-lg p-2.5 text-sm"
-            />
-            <input
               type="text"
-              placeholder="Notes or pending actions"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Requirement specifications / notes"
+              value={newNotes}
+              onChange={(e) => setNewNotes(e.target.value)}
               className="border border-slate-300 rounded-lg p-2.5 text-sm"
             />
             <button
               type="submit"
-              className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm py-2.5 cursor-pointer shadow-xs"
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg py-2.5 cursor-pointer"
             >
-              <Plus size={16} /> Add Checkpoint
+              Set Criteria
             </button>
           </form>
         </div>
 
-        {/* Categories & Their Checklists */}
+        {/* Categories and Their Verification Status */}
         {loading ? (
-          <p className="text-center text-slate-500 py-10 font-medium">Loading compliance records...</p>
+          <p className="text-center text-slate-500 py-10 font-medium">Checking compliance...</p>
         ) : (
           <div className="space-y-6">
-            {categories.map((cat) => {
-              const categoryDocs = docs.filter(d => d.category === cat.name);
-              const totalItems = categoryDocs.length;
-              const completedItems = categoryDocs.filter(d => d.status === 'Completed').length;
-              const pendingItems = categoryDocs.filter(d => d.status === 'Pending').length;
-              const inProgressItems = categoryDocs.filter(d => d.status === 'In Progress').length;
-              const isAllComplete = totalItems > 0 && completedItems === totalItems;
-              const isEditingCat = editingCategoryId === cat.id;
+            {currentCategories.map((cat) => {
+              const categoryItems = items.filter(i => i.category === cat);
+              if (categoryItems.length === 0) return null;
+
+              const totalCat = categoryItems.length;
+              const fulfilledCat = categoryItems.filter(i => i.document_url !== null).length;
+              const missingInCat = categoryItems.filter(i => i.document_url === null);
+              const isCategoryFulfilled = totalCat > 0 && fulfilledCat === totalCat;
 
               return (
-                <div key={cat.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div key={cat} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
                   
-                  {/* Category Header with Edit/Delete */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2">
-                      {isEditingCat ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={editingCategoryName}
-                            onChange={(e) => setEditingCategoryName(e.target.value)}
-                            className="border border-slate-300 rounded px-2 py-1 text-sm bg-white"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => saveCategoryEdit(cat)}
-                            className="bg-emerald-600 text-white p-1 rounded hover:bg-emerald-700 cursor-pointer"
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingCategoryId(null)}
-                            className="bg-slate-300 text-slate-800 p-1 rounded hover:bg-slate-400 cursor-pointer"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-xl font-extrabold text-slate-900">{cat.name}</h3>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingCategoryId(cat.id);
-                              setEditingCategoryName(cat.name);
-                            }}
-                            className="text-slate-400 hover:text-slate-600 p-1 rounded cursor-pointer"
-                            title="Edit Category Name"
-                          >
-                            <FolderEdit size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteCategory(cat)}
-                            className="text-slate-400 hover:text-rose-600 p-1 rounded cursor-pointer"
-                            title="Delete Category"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      )}
+                  {/* Category Header */}
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="text-xl font-extrabold text-slate-900">{cat}</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {fulfilledCat} of {totalCat} required documents verified
+                      </p>
                     </div>
 
-                    <div className="text-xs font-semibold text-slate-600">
-                      {completedItems} / {totalItems} Checkpoints Done
-                    </div>
+                    <span className={`text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider ${
+                      isCategoryFulfilled 
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}>
+                      {isCategoryFulfilled ? 'Category Complete' : `${missingInCat.length} Missing`}
+                    </span>
                   </div>
 
-                  {/* Category Completion Status Banner */}
-                  {totalItems === 0 ? (
-                    <div className="p-3 bg-slate-50 border border-dashed border-slate-300 rounded-xl text-center text-xs text-slate-500">
-                      No checkpoints added to this category yet. Use the form above to add one.
-                    </div>
-                  ) : isAllComplete ? (
-                    <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold shadow-xs">
+                  {/* Category Alert Banner */}
+                  {isCategoryFulfilled ? (
+                    <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-xl text-xs font-bold">
                       <CheckCircle2 className="text-emerald-600" size={18} />
-                      <span>COMPLETE: All {totalItems} checkpoints in this category are fulfilled and verified!</span>
+                      <span>All criteria in "{cat}" have verified uploaded documents!</span>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between p-3 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-bold shadow-xs">
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="text-rose-600" size={18} />
-                        <span>ATTENTION: {pendingItems + inProgressItems} checkpoint(s) incomplete ({pendingItems} Pending, {inProgressItems} In Progress).</span>
-                      </div>
-                      <span className="bg-rose-200 text-rose-800 px-2.5 py-0.5 rounded-full uppercase text-[10px] tracking-wider">
-                        Action Required
+                    <div className="flex items-center gap-2 p-3 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-bold">
+                      <AlertCircle className="text-rose-600" size={18} />
+                      <span>
+                        CRITERIA NOT UPDATED: Missing uploads for {missingInCat.map(m => `"${m.title}"`).join(', ')}.
                       </span>
                     </div>
                   )}
 
-                  {/* Individual Checkpoints List */}
-                  {totalItems > 0 && (
-                    <div className="grid grid-cols-1 gap-2 pt-1">
-                      {categoryDocs.map((item) => {
-                        const isPending = item.status === 'Pending';
-                        const isInProgress = item.status === 'In Progress';
-                        const isDone = item.status === 'Completed';
-                        const isEditingThisDoc = editingDocId === item.id;
+                  {/* Checklist of Criteria */}
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {categoryItems.map((item) => {
+                      const isUploaded = item.document_url !== null;
 
-                        return (
-                          <div
-                            key={item.id}
-                            className={`p-3.5 rounded-xl border transition ${
-                              isPending
-                                ? 'bg-rose-50/60 border-rose-200'
-                                : isInProgress
-                                ? 'bg-amber-50/60 border-amber-200'
-                                : 'bg-white border-slate-200'
-                            }`}
-                          >
-                            {isEditingThisDoc ? (
-                              <div className="space-y-2">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                  <input
-                                    type="text"
-                                    value={editTitle}
-                                    onChange={(e) => setEditTitle(e.target.value)}
-                                    className="border rounded p-1.5 text-xs bg-white"
-                                    placeholder="Title"
-                                  />
-                                  <input
-                                    type="url"
-                                    value={editUrl}
-                                    onChange={(e) => setEditUrl(e.target.value)}
-                                    className="border rounded p-1.5 text-xs bg-white"
-                                    placeholder="URL"
-                                  />
-                                  <input
-                                    type="text"
-                                    value={editNotes}
-                                    onChange={(e) => setEditNotes(e.target.value)}
-                                    className="border rounded p-1.5 text-xs bg-white"
-                                    placeholder="Notes"
-                                  />
-                                </div>
-                                <div className="flex justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => saveDocEdit(item.id)}
-                                    className="flex items-center gap-1 bg-emerald-600 text-white text-xs px-2.5 py-1 rounded hover:bg-emerald-700 cursor-pointer"
-                                  >
-                                    <Check size={12} /> Save
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingDocId(null)}
-                                    className="flex items-center gap-1 bg-slate-300 text-slate-800 text-xs px-2.5 py-1 rounded cursor-pointer"
-                                  >
-                                    <X size={12} /> Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    {isPending && <AlertCircle className="text-rose-600 shrink-0" size={16} />}
-                                    {isInProgress && <Clock className="text-amber-600 shrink-0" size={16} />}
-                                    {isDone && <CheckCircle2 className="text-emerald-600 shrink-0" size={16} />}
-
-                                    <span className={`text-sm ${isPending ? 'font-bold text-rose-950' : 'font-medium text-slate-900'}`}>
-                                      {item.title}
-                                    </span>
-
-                                    {isPending && (
-                                      <span className="bg-rose-200 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
-                                        Pending
-                                      </span>
-                                    )}
-                                  </div>
-                                  {item.notes && <p className="text-xs text-slate-500 ml-6">{item.notes}</p>}
-                                </div>
-
-                                <div className="flex items-center gap-2 self-end sm:self-center">
-                                  {item.document_url && (
-                                    <a
-                                      href={item.document_url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="flex items-center gap-1 text-xs text-blue-600 hover:underline mr-1"
-                                    >
-                                      Doc <ExternalLink size={12} />
-                                    </a>
-                                  )}
-
-                                  <select
-                                    value={item.status}
-                                    onChange={(e) => updateDocStatus(item.id, e.target.value as DocumentItem['status'])}
-                                    className="text-xs border rounded-lg px-2 py-1 bg-white font-medium shadow-xs cursor-pointer"
-                                  >
-                                    <option value="Pending">Pending</option>
-                                    <option value="In Progress">In Progress</option>
-                                    <option value="Completed">Completed</option>
-                                  </select>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => startEditingDoc(item)}
-                                    className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
-                                    title="Edit"
-                                  >
-                                    <Edit2 size={14} />
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => deleteDoc(item.id)}
-                                    className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                                    title="Delete"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              </div>
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                            isUploaded
+                              ? 'bg-white border-slate-200'
+                              : 'bg-rose-50/70 border-rose-300'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              {isUploaded ? (
+                                <CheckCircle2 className="text-emerald-600 shrink-0" size={18} />
+                              ) : (
+                                <AlertCircle className="text-rose-600 shrink-0" size={18} />
+                              )}
+                              <span className={`text-sm ${isUploaded ? 'font-medium text-slate-900' : 'font-bold text-rose-950'}`}>
+                                {item.title}
+                              </span>
+                              {!isUploaded && (
+                                <span className="bg-rose-200 text-rose-800 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">
+                                  NOT UPLOADED
+                                </span>
+                              )}
+                            </div>
+                            {item.notes && <p className="text-xs text-slate-500 ml-6">{item.notes}</p>}
+                            {isUploaded && item.file_name && (
+                              <p className="text-xs text-emerald-700 font-medium ml-6 flex items-center gap-1">
+                                <FileText size={12} /> {item.file_name} (Uploaded)
+                              </p>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+
+                          <div className="flex items-center gap-2 self-end sm:self-center">
+                            {isUploaded ? (
+                              <>
+                                <a
+                                  href={item.document_url!}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="flex items-center gap-1 text-xs text-blue-600 hover:underline mr-2"
+                                >
+                                  View Doc <ExternalLink size={12} />
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => removeDocument(item.id)}
+                                  className="text-xs text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                                  title="Remove attachment"
+                                >
+                                  Remove File
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={uploadingId === item.id}
+                                onClick={() => triggerUpload(item.id)}
+                                className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition cursor-pointer shadow-xs"
+                              >
+                                <Upload size={14} />
+                                {uploadingId === item.id ? 'Uploading...' : 'Upload Document'}
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => deleteCriteria(item.id)}
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded cursor-pointer"
+                              title="Delete Criteria"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
 
                 </div>
               );
