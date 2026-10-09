@@ -285,7 +285,7 @@ export default function ERTHDashboard() {
             <div>
               <span className="text-xs tracking-widest font-bold text-emerald-400 uppercase">Holding Group</span>
               <h1 className="text-3xl font-black tracking-tight">ERTH</h1>
-              <p className="text-slate-400 text-xs">Central Corporate Multi-Vertical Operating Vault</p>
+              <p className="text-slate-400 text-xs">Document Vault</p>
             </div>
           </div>
 
