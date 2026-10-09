@@ -262,14 +262,16 @@ export default function EarthDashboard() {
         {/* Global Parent Company Header */}
         <header className="bg-slate-900 text-white p-6 rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-emerald-500 p-2.5 rounded-2xl text-slate-950 font-black">
-              <Globe size={26} />
-            </div>
-            <div>
-              <span className="text-xs tracking-widest font-bold text-emerald-400 uppercase">Holding Group</span>
-              <h1 className="text-3xl font-black tracking-tight">EARTH</h1>
-              <p className="text-slate-400 text-xs">Central Corporate Multi-Vertical Operating Vault</p>
-            </div>
+            <img 
+  src="/icon.png" 
+  alt="ERTH Logo" 
+  className="h-16 w-auto rounded-xl bg-white p-1 object-contain shadow-sm" 
+/>
+<div>
+  <span className="text-xs tracking-widest font-bold text-emerald-400 uppercase">Holding Group</span>
+  <h1 className="text-3xl font-black tracking-tight">ERTH</h1>
+  <p className="text-slate-400 text-xs">Central Corporate Multi-Vertical Operating Vault</p>
+</div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -470,7 +472,7 @@ export default function EarthDashboard() {
                 onClick={() => setActiveVertical(null)}
                 className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 cursor-pointer"
               >
-                <ArrowLeft size={16} /> Back to Earth Verticals Hub
+                <ArrowLeft size={16} /> Back to Erth Verticals Hub
               </button>
 
               <div className="flex items-center gap-2">
