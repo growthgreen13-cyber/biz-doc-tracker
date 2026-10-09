@@ -17,7 +17,10 @@ import {
   ArrowLeft,
   Edit2,
   Check,
-  X
+  X,
+  Search,
+  Calendar,
+  RotateCcw
 } from 'lucide-react';
 
 interface VerticalItem {
@@ -31,6 +34,7 @@ interface AttachedFile {
   criteria_id: string;
   file_name: string;
   file_url: string;
+  created_at: string;
 }
 
 interface CriteriaItem {
@@ -39,6 +43,7 @@ interface CriteriaItem {
   category: string;
   title: string;
   notes: string;
+  created_at?: string;
   files?: AttachedFile[];
 }
 
@@ -70,6 +75,12 @@ export default function ERTHDashboard() {
   const [newNotes, setNewNotes] = useState('');
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+
+  // Search & Date Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategory, setFilterCategory] = useState('ALL');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   // Multi-file upload reference
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -245,12 +256,52 @@ export default function ERTHDashboard() {
     }
   }
 
+  function resetFilters() {
+    setSearchQuery('');
+    setFilterCategory('ALL');
+    setStartDate('');
+    setEndDate('');
+  }
+
   // Scoped calculation for active vertical
   const activeItems = activeVertical ? items.filter(i => i.vertical_id === activeVertical.id) : [];
   const activeCategories = Array.from(new Set([...categories, ...activeItems.map(i => i.category)]));
 
+  // Date & Keyword filtering logic
+  const filteredActiveItems = activeItems.filter((item) => {
+    // 1. Category Filter
+    if (filterCategory !== 'ALL' && item.category !== filterCategory) {
+      return false;
+    }
+
+    // 2. Keyword Filter (matches title, notes, or uploaded filenames)
+    if (searchQuery.trim() !== '') {
+      const query = searchQuery.toLowerCase();
+      const titleMatch = item.title.toLowerCase().includes(query);
+      const notesMatch = item.notes?.toLowerCase().includes(query);
+      const fileMatch = item.files?.some(f => f.file_name.toLowerCase().includes(query));
+      if (!titleMatch && !notesMatch && !fileMatch) return false;
+    }
+
+    // 3. Date / Calendar Range Filter (evaluates file upload dates)
+    if (startDate || endDate) {
+      if (!item.files || item.files.length === 0) return false;
+
+      const hasMatchingFileDate = item.files.some((f) => {
+        if (!f.created_at) return false;
+        const fileDate = f.created_at.split('T')[0]; // Extract YYYY-MM-DD
+        if (startDate && fileDate < startDate) return false;
+        if (endDate && fileDate > endDate) return false;
+        return true;
+      });
+
+      if (!hasMatchingFileDate) return false;
+    }
+
+    return true;
+  });
+
   const totalCriteriaActive = activeItems.length;
-  // A criteria is fulfilled if it has at least 1 document uploaded
   const fulfilledCriteriaActive = activeItems.filter(i => (i.files?.length || 0) > 0).length;
   const missingCriteriaActive = activeItems.filter(i => (i.files?.length || 0) === 0);
   const activeReadiness = totalCriteriaActive ? Math.round((fulfilledCriteriaActive / totalCriteriaActive) * 100) : 0;
@@ -262,7 +313,6 @@ export default function ERTHDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 p-4 md:p-8 font-sans">
-      {/* File input supporting multiple document selection */}
       <input 
         type="file" 
         multiple 
@@ -514,7 +564,94 @@ export default function ERTHDashboard() {
               </div>
             </div>
 
-            {missingCriteriaActive.length > 0 && (
+            {/* INTEGRATED SEARCH & CALENDAR DATE FILTER TOOLBAR */}
+            <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calendar size={18} className="text-emerald-600" />
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Filter Documents & Calendar Search</h3>
+                </div>
+                {(searchQuery || filterCategory !== 'ALL' || startDate || endDate) && (
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                  >
+                    <RotateCcw size={13} /> Reset Filters
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                {/* 1. Keyword search */}
+                <div className="relative">
+                  <Search size={15} className="absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search checkpoint or file name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 rounded-xl bg-white focus:outline-emerald-500"
+                  />
+                </div>
+
+                {/* 2. Category filter */}
+                <div>
+                  <select
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
+                    className="w-full py-2 px-3 text-xs border border-slate-300 rounded-xl bg-white font-medium focus:outline-emerald-500"
+                  >
+                    <option value="ALL">All Categories</option>
+                    {activeCategories.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. From Date (Calendar) */}
+                <div>
+                  <div className="flex items-center gap-1.5 border border-slate-300 rounded-xl px-2.5 py-1.5 bg-white">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">From:</span>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full text-xs bg-transparent focus:outline-none text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                {/* 4. To Date (Calendar) */}
+                <div>
+                  <div className="flex items-center gap-1.5 border border-slate-300 rounded-xl px-2.5 py-1.5 bg-white">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">To:</span>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full text-xs bg-transparent focus:outline-none text-slate-700"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Filter Indicators */}
+              {(searchQuery || filterCategory !== 'ALL' || startDate || endDate) && (
+                <div className="pt-2 flex items-center justify-between text-xs text-slate-500 border-t border-slate-100">
+                  <span>
+                    Showing filtered results: <strong>{filteredActiveItems.length}</strong> matching criteria
+                  </span>
+                  {(startDate || endDate) && (
+                    <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                      Uploaded between {startDate || 'earliest'} and {endDate || 'latest'}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {missingCriteriaActive.length > 0 && !searchQuery && !startDate && (
               <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 text-rose-950">
                 <AlertTriangle className="text-rose-600 shrink-0 mt-0.5" size={20} />
                 <div>
@@ -592,10 +729,10 @@ export default function ERTHDashboard() {
               </form>
             </div>
 
-            {/* List of Criteria by Category with Multiple Files Support */}
+            {/* List of Criteria by Category with Multiple Files Support & Filter Support */}
             <div className="space-y-6">
               {activeCategories.map((cat) => {
-                const catItems = activeItems.filter(i => i.category === cat);
+                const catItems = filteredActiveItems.filter(i => i.category === cat);
                 if (catItems.length === 0) return null;
 
                 const isCatComplete = catItems.length > 0 && catItems.every(i => (i.files?.length || 0) > 0);
@@ -607,7 +744,7 @@ export default function ERTHDashboard() {
                       <div>
                         <h4 className="text-lg font-black text-slate-900">{cat}</h4>
                         <p className="text-xs text-slate-500">
-                          {catItems.filter(i => (i.files?.length || 0) > 0).length} of {catItems.length} complete
+                          {catItems.filter(i => (i.files?.length || 0) > 0).length} of {catItems.length} matching criteria
                         </p>
                       </div>
                       <span className={`text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider ${
@@ -654,7 +791,6 @@ export default function ERTHDashboard() {
                               </div>
 
                               <div className="flex items-center gap-2 self-end sm:self-center">
-                                {/* Upload button (allows adding more docs) */}
                                 <button
                                   type="button"
                                   disabled={uploadingId === item.id}
@@ -676,7 +812,7 @@ export default function ERTHDashboard() {
                               </div>
                             </div>
 
-                            {/* Attached files listing with direct view, download, and delete */}
+                            {/* Attached files listing with date pill, direct view, and download */}
                             {fileCount > 0 && (
                               <div className="ml-6 pt-2 border-t border-slate-100 space-y-1.5">
                                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Uploaded Documents:</span>
@@ -686,15 +822,21 @@ export default function ERTHDashboard() {
                                       key={f.id}
                                       className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs"
                                     >
-                                      <div className="flex items-center gap-1.5 truncate mr-2">
-                                        <FileText size={14} className="text-emerald-600 shrink-0" />
-                                        <span className="truncate font-medium text-slate-800" title={f.file_name}>
-                                          {f.file_name}
-                                        </span>
+                                      <div className="flex flex-col truncate mr-2">
+                                        <div className="flex items-center gap-1.5 truncate">
+                                          <FileText size={14} className="text-emerald-600 shrink-0" />
+                                          <span className="truncate font-medium text-slate-800" title={f.file_name}>
+                                            {f.file_name}
+                                          </span>
+                                        </div>
+                                        {f.created_at && (
+                                          <span className="text-[10px] text-slate-400 ml-5">
+                                            Uploaded: {new Date(f.created_at).toLocaleDateString()}
+                                          </span>
+                                        )}
                                       </div>
 
                                       <div className="flex items-center gap-1 shrink-0">
-                                        {/* View Doc */}
                                         <a
                                           href={f.file_url}
                                           target="_blank"
@@ -705,7 +847,6 @@ export default function ERTHDashboard() {
                                           <ExternalLink size={13} />
                                         </a>
 
-                                        {/* Direct Download File */}
                                         <button
                                           type="button"
                                           onClick={() => downloadFile(f.file_url, f.file_name)}
@@ -715,7 +856,6 @@ export default function ERTHDashboard() {
                                           <Download size={13} />
                                         </button>
 
-                                        {/* Delete File */}
                                         <button
                                           type="button"
                                           onClick={() => removeFile(f.id)}
@@ -738,6 +878,19 @@ export default function ERTHDashboard() {
                   </div>
                 );
               })}
+
+              {filteredActiveItems.length === 0 && (
+                <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 space-y-2">
+                  <p className="text-sm font-semibold text-slate-700">No documents match the selected filters or date range.</p>
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="text-xs text-emerald-600 hover:underline font-bold"
+                  >
+                    Clear Search & Date Filters
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
